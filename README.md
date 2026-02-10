@@ -2,7 +2,8 @@
 
 A Go library for managing background workers with periodic execution, retry logic, and graceful shutdown.
 
-- **Periodic execution** - Run jobs at configurable intervals
+- **Periodic execution** - Run jobs at configurable intervals or specific times
+- **Scheduling** - Daily, weekly, or every N days at specific times
 - **Retry logic** - Automatic retries with configurable attempts and delay
 - **Backoff strategies** - Constant, Linear, and Exponential backoff
 - **Timeout support** - Set max execution time per job
@@ -45,6 +46,15 @@ func main() {
         workers.WithBackoffStrategy(workers.ExponentialBackoff),
     ))
     
+    // Schedule jobs at specific times
+    wm.RegisterWorker(workers.NewWorker("report", reportJob,
+        workers.WithSchedules(
+            workers.DailyAt(9, 0),                 // Daily at 9:00 AM
+            workers.WeeklyAt(time.Monday, 14, 30), // Every Monday at 2:30 PM
+        ),
+        workers.WithTimeout(10*time.Minute),
+    ))
+    
     wm.Start()
 }
 
@@ -56,5 +66,10 @@ func cleanupJob(ctx context.Context, log *slog.Logger) error {
 func syncJob(ctx context.Context, log *slog.Logger) error {
     log.Info("syncing data with external service")
     return fmt.Errorf("connection refused")
+}
+
+func reportJob(ctx context.Context, log *slog.Logger) error {
+    log.Info("generating daily report")
+    return nil
 }
 ```
