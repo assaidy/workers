@@ -46,7 +46,7 @@ type Schedule struct {
 //	workers.DailyAt(14, 30)  // Daily at 2:30 PM
 func DailyAt(hour, minute int) Schedule {
 	validateHour(hour)
-	validateMinute(hour)
+	validateMinute(minute)
 	return Schedule{
 		hour:   hour,
 		minute: minute,
