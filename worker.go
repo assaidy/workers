@@ -15,9 +15,11 @@ type Worker struct {
 	tick            time.Duration
 	schedules       []Schedule
 	timeout         time.Duration
-	retries         int
+	nRetries        int
 	retryDelay      time.Duration
 	backoffStrategy BackoffStrategy
+	nRuns           int
+	runCount        int
 	logger          *slog.Logger
 }
 
@@ -177,7 +179,7 @@ func NewWorker(name string, job WorkerJob, options ...WorkerOption) Worker {
 		name:            name,
 		job:             job,
 		tick:            1 * time.Hour,
-		retries:         3,
+		nRetries:        3,
 		retryDelay:      5 * time.Second,
 		backoffStrategy: ConstantBackoff,
 	}
@@ -211,7 +213,7 @@ func WithItsOwnLogger(logger *slog.Logger) WorkerOption {
 // Default: 1 hour
 func WithTick(tick time.Duration) WorkerOption {
 	return func(w *Worker) {
-		if w.tick <= 0 {
+		if tick <= 0 {
 			panic("tick must be > 0")
 		}
 		w.tick = tick
@@ -224,22 +226,22 @@ func WithTick(tick time.Duration) WorkerOption {
 // Default: no timeout
 func WithTimeout(timeout time.Duration) WorkerOption {
 	return func(w *Worker) {
-		if w.timeout <= 0 {
+		if timeout <= 0 {
 			panic("timeout must be > 0")
 		}
 		w.timeout = timeout
 	}
 }
 
-// WithRetries sets the number of retry attempts for failed jobs.
+// WithNRetries sets the number of retry attempts for failed jobs.
 //
 // Default: 3 retries
-func WithRetries(n int) WorkerOption {
+func WithNRetries(n int) WorkerOption {
 	return func(w *Worker) {
 		if n < 0 {
-			panic("retries must be > 0")
+			panic("number of retries must be > 0")
 		}
-		w.retries = n
+		w.nRetries = n
 	}
 }
 
@@ -249,7 +251,7 @@ func WithRetries(n int) WorkerOption {
 // Default: 5 seconds
 func WithRetryDelay(delay time.Duration) WorkerOption {
 	return func(w *Worker) {
-		if w.retryDelay <= 0 {
+		if delay <= 0 {
 			panic("delay must be > 0")
 		}
 		w.retryDelay = delay
@@ -282,22 +284,52 @@ func WithSchedules(schedules ...Schedule) WorkerOption {
 	}
 }
 
+// WithNRuns sets a limit on the total number of job executions.
+// When the limit is reached, the worker stops automatically.
+// Must be > 0.
+//
+// Default: unlimited runs
+func WithNRuns(n int) WorkerOption {
+	return func(w *Worker) {
+		if n <= 0 {
+			panic("number of runs must be > 0")
+		}
+		w.nRuns = n
+	}
+}
+
 // start begins the worker's execution loop.
-func (me Worker) start(workerCtx context.Context) {
+func (me *Worker) start(workerCtx context.Context) {
 	me.logger.Info("worker started", "worker", me.name)
 	defer me.logger.Info("worker stopped", "worker", me.name)
 
+	firstRun := true
+
 	for {
 		waitDuration := me.getNextWaitDuration()
-		me.logger.Info("next run",
-			"worker", me.name,
-			"in", waitDuration,
-			"at", time.Now().Add(waitDuration).Format(time.RFC3339),
-		)
+		if firstRun && len(me.schedules) == 0 {
+			waitDuration = 0 // Run immediately for unscheduled workers
+			firstRun = false
+		}
+
+		if waitDuration > 0 {
+			me.logger.Info("next run",
+				"worker", me.name,
+				"in", waitDuration,
+				"at", time.Now().Add(waitDuration).Format(time.RFC3339),
+			)
+		}
 
 		select {
 		case <-time.After(waitDuration):
 			me.executeJob()
+			if me.nRuns > 0 { // Avoid overflow by only incrementing for limited runs
+				me.runCount++
+				if me.runCount >= me.nRuns {
+					me.logger.Info("worker reached run limit", "worker", me.name, "runs", me.runCount)
+					return
+				}
+			}
 		case <-workerCtx.Done():
 			return
 		}
@@ -395,7 +427,7 @@ func (me Worker) executeJob() {
 		me.logger.Error("job failed", "worker", me.name, "error", err)
 
 		delay := me.retryDelay
-		for i := 1; i <= me.retries; i++ {
+		for i := 1; i <= me.nRetries; i++ {
 			<-time.After(delay)
 			me.logger.Info("job retry started", "worker", me.name, "retry", i)
 

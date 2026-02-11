@@ -7,6 +7,7 @@ A Go library for managing background workers with periodic execution, retry logi
 - **Retry logic** - Automatic retries with configurable attempts and delay
 - **Backoff strategies** - Constant, Linear, and Exponential backoff
 - **Timeout support** - Set max execution time per job
+- **Execution limit** - Limit total number of job runs
 - **Graceful shutdown** - Handles SIGINT/SIGTERM signals properly
 - **Structured logging** - Built-in slog integration
 - **Panic recovery** - Workers continue even if one panics
@@ -54,6 +55,18 @@ func main() {
         ),
         workers.WithTimeout(10*time.Minute),
     ))
+
+    // Limit total executions
+    wm.RegisterWorker(workers.NewWorker("migrate", migrateJob,
+        workers.WithTick(5*time.Minute),
+        workers.WithNRuns(10), // Run 10 times then stop
+        workers.WithTimeout(2*time.Minute),
+    ))
+
+    // Run once without timeout (job might hang)
+    wm.RegisterWorker(workers.NewWorker("long-task", longRunningJob,
+        workers.WithNRuns(1), // Run once and stop
+    ))
     
     wm.Start()
 }
@@ -71,5 +84,17 @@ func syncJob(ctx context.Context, log *slog.Logger) error {
 func reportJob(ctx context.Context, log *slog.Logger) error {
     log.Info("generating daily report")
     return nil
+}
+
+func migrateJob(ctx context.Context, log *slog.Logger) error {
+    log.Info("running migration batch")
+    return nil
+}
+
+func longRunningJob(ctx context.Context, log *slog.Logger) error {
+    log.Info("starting long-running task without timeout")
+    // This job could potentially hang forever
+    // The worker will complete after this single run
+    select {}
 }
 ```
