@@ -382,8 +382,14 @@ func (me Worker) calculateNextRun(schedule Schedule, from time.Time) time.Time {
 func (me Worker) executeJob() {
 	me.logger.Info("job started", "worker", me.name)
 
-	jobCtx, jobCtxCancel := context.WithTimeout(context.Background(), me.timeout)
-	defer jobCtxCancel()
+	// No timeout if value <= 0 (default).
+	// Users can only set timeout to value > 0.
+	jobCtx := context.Background()
+	if me.timeout > 0 {
+		var jobCtxCancel context.CancelFunc
+		jobCtx, jobCtxCancel = context.WithTimeout(jobCtx, me.timeout)
+		defer jobCtxCancel()
+	}
 
 	if err := me.job(jobCtx, me.logger); err != nil {
 		me.logger.Error("job failed", "worker", me.name, "error", err)
