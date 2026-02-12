@@ -440,6 +440,80 @@ func TestWorker_NoRetriesOnSuccess(t *testing.T) {
 	})
 }
 
+func TestWorker_RetryWithTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		retryTimeoutCount := 0
+		job := func(ctx context.Context, log *slog.Logger) error {
+			select {
+			case <-ctx.Done():
+				retryTimeoutCount++
+				return ctx.Err()
+			case <-time.After(1 * time.Hour):
+				return nil
+			}
+		}
+
+		w := NewWorker("test", job,
+			WithTimeout(50*time.Millisecond),
+			WithNRetries(2),
+			WithRetryDelay(10*time.Millisecond),
+			WithNRuns(1),
+		)
+		w.logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go w.start(ctx)
+
+		// Wait for initial run + 2 retries to timeout
+		time.Sleep(200 * time.Millisecond)
+
+		// All 3 attempts (initial + 2 retries) should timeout
+		if retryTimeoutCount != 3 {
+			t.Errorf("expected 3 timeouts (initial + 2 retries), got %d", retryTimeoutCount)
+		}
+	})
+}
+
+func TestWorker_RetryWithoutTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		callCount := 0
+		job := func(ctx context.Context, log *slog.Logger) error {
+			// Check that context has no deadline (no timeout set)
+			_, hasDeadline := ctx.Deadline()
+			if hasDeadline {
+				t.Error("retry context should not have a deadline when no timeout is configured")
+			}
+			callCount++
+			if callCount < 3 {
+				return errors.New("temporary error")
+			}
+			return nil
+		}
+
+		w := NewWorker("test", job,
+			WithNRetries(3),
+			WithRetryDelay(10*time.Millisecond),
+			WithNRuns(1),
+			// No WithTimeout - should default to no timeout
+		)
+		w.logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go w.start(ctx)
+
+		// Wait for initial run + 2 retries
+		time.Sleep(100 * time.Millisecond)
+
+		if callCount != 3 {
+			t.Errorf("expected 3 calls (1 initial + 2 retries), got %d", callCount)
+		}
+	})
+}
+
 func TestConstantBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		baseDelay := 100 * time.Millisecond

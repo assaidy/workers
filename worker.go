@@ -414,14 +414,8 @@ func (me Worker) calculateNextRun(schedule Schedule, from time.Time) time.Time {
 func (me Worker) executeJob() {
 	me.logger.Info("job started", "worker", me.name)
 
-	// No timeout if value <= 0 (default).
-	// Users can only set timeout to value > 0.
-	jobCtx := context.Background()
-	if me.timeout > 0 {
-		var jobCtxCancel context.CancelFunc
-		jobCtx, jobCtxCancel = context.WithTimeout(jobCtx, me.timeout)
-		defer jobCtxCancel()
-	}
+	jobCtx, jobCtxCancel := me.getRunCtx()
+	defer jobCtxCancel()
 
 	if err := me.job(jobCtx, me.logger); err != nil {
 		me.logger.Error("job failed", "worker", me.name, "error", err)
@@ -431,7 +425,7 @@ func (me Worker) executeJob() {
 			<-time.After(delay)
 			me.logger.Info("job retry started", "worker", me.name, "retry", i)
 
-			retryCtx, retryCtxCancel := context.WithTimeout(context.Background(), me.timeout)
+			retryCtx, retryCtxCancel := me.getRunCtx()
 			if err := me.job(retryCtx, me.logger); err != nil {
 				me.logger.Error("job retry failed", "worker", me.name, "retry", i)
 				retryCtxCancel()
@@ -446,4 +440,13 @@ func (me Worker) executeJob() {
 	} else {
 		me.logger.Info("job finished successfully", "worker", me.name)
 	}
+}
+
+func (me Worker) getRunCtx() (context.Context, context.CancelFunc) {
+	if me.timeout > 0 {
+		return context.WithTimeout(context.Background(), me.timeout)
+	}
+	// No timeout if value <= 0 (default).
+	// Users can only set timeout to value > 0.
+	return context.WithCancel(context.Background())
 }
