@@ -8,7 +8,9 @@ import (
 	"time"
 )
 
-// Worker represents a background job that executes periodically.
+// Worker manages a background job with configurable execution intervals,
+// retry logic, timeouts, and scheduling. Workers can run periodically or
+// at specific times defined by schedules.
 type Worker struct {
 	name            string
 	job             WorkerJob
@@ -23,11 +25,13 @@ type Worker struct {
 	logger          *slog.Logger
 }
 
-// WorkerJob is a function that performs the actual work for a worker.
+// WorkerJob defines the function signature for job implementations.
+// The function receives a context for cancellation and timeout handling,
+// and a logger for structured logging within the job.
 type WorkerJob func(context.Context, *slog.Logger) error
 
-// Schedule represents a specific time pattern for running a worker.
-// Use the constructor functions DailyAt, WeeklyAt, or EveryNDays to create schedules.
+// Schedule defines when a worker should execute. Use DailyAt, WeeklyAt,
+// or EveryNDays to create schedules. Modify with the In method to set timezones.
 type Schedule struct {
 	hour       int
 	minute     int
@@ -124,6 +128,7 @@ func (me Schedule) In(location *time.Location) Schedule {
 }
 
 // String returns a human-readable description of the schedule.
+// Examples: "daily at 09:00", "Monday at 14:30", "every 2 days at 02:00"
 func (me Schedule) String() string {
 	timeStr := fmt.Sprintf("%02d:%02d", me.hour, me.minute)
 	if me.weekday != nil {
@@ -135,18 +140,13 @@ func (me Schedule) String() string {
 	return fmt.Sprintf("daily at %s", timeStr)
 }
 
-// BackoffStrategy calculates the delay duration before the next retry attempt.
-// The attempt parameter is 1-based (first retry is attempt 1).
+// BackoffStrategy defines how long to wait between retry attempts.
+// The baseDelay is the initial delay configured, and attempt is 1-based
+// (first retry is attempt 1). Return the calculated delay duration.
 type BackoffStrategy func(baseDelay time.Duration, attempt int) time.Duration
 
-// Predefined backoff strategies implement various retry delay patterns.
-// All strategies are type-safe and will cause compile-time errors if the
-// [BackoffStrategy] signature changes.
-//
-// Strategy types:
-//   - Fixed: Constant delay between retries
-//   - Linear/Exponential: Increasing delay based on attempt number
-//   - TODO: jittered backoff
+// Predefined backoff strategies provide common retry delay patterns.
+// All strategies are type-safe and implement the BackoffStrategy type.
 var (
 	// ConstantBackoff returns a fixed delay regardless of attempt number.
 	//
@@ -172,8 +172,9 @@ var (
 	}
 )
 
-// NewWorker creates a new Worker with the given name and job function.
-// Panics if invalid options are set.
+// NewWorker creates a worker with the specified name and job function.
+// Apply options to configure tick intervals, timeouts, retries, schedules,
+// and other behaviors. Panics if any option is invalid.
 func NewWorker(name string, job WorkerJob, options ...WorkerOption) Worker {
 	w := Worker{
 		name:            name,
@@ -191,13 +192,13 @@ func NewWorker(name string, job WorkerJob, options ...WorkerOption) Worker {
 	return w
 }
 
-// WorkerOption is a function that configures a Worker.
+// WorkerOption configures a Worker. Use the With* functions to create options.
 type WorkerOption func(*Worker)
 
-// WithItsOwnLogger sets a custom logger for the worker.
-// Mustn't be nil.
+// WithItsOwnLogger sets a worker-specific logger, overriding the WorkerManager's logger.
+// The logger must not be nil.
 //
-// Default: logger of WorkerManager
+// Default: inherits from WorkerManager
 func WithItsOwnLogger(logger *slog.Logger) WorkerOption {
 	return func(w *Worker) {
 		if logger == nil {
@@ -208,7 +209,7 @@ func WithItsOwnLogger(logger *slog.Logger) WorkerOption {
 }
 
 // WithTick sets the interval between job executions.
-// Must be > 0.
+// Ignored when schedules are set. The tick must be greater than 0.
 //
 // Default: 1 hour
 func WithTick(tick time.Duration) WorkerOption {
@@ -220,10 +221,10 @@ func WithTick(tick time.Duration) WorkerOption {
 	}
 }
 
-// WithTimeout sets the maximum duration allowed for each job execution.
-// Must be > 0.
+// WithTimeout sets a maximum execution time for each job run.
+// Jobs exceeding this duration are cancelled via context. Must be greater than 0.
 //
-// Default: no timeout
+// Default: no timeout (jobs run indefinitely)
 func WithTimeout(timeout time.Duration) WorkerOption {
 	return func(w *Worker) {
 		if timeout <= 0 {
@@ -233,7 +234,8 @@ func WithTimeout(timeout time.Duration) WorkerOption {
 	}
 }
 
-// WithNRetries sets the number of retry attempts for failed jobs.
+// WithNRetries sets how many times to retry a failed job.
+// Set to 0 to disable retries.
 //
 // Default: 3 retries
 func WithNRetries(n int) WorkerOption {
@@ -245,8 +247,8 @@ func WithNRetries(n int) WorkerOption {
 	}
 }
 
-// WithRetryDelay sets the delay between retry attempts.
-// Must be > 0.
+// WithRetryDelay sets the initial delay between retry attempts.
+// The actual delay may increase based on the backoff strategy. Must be greater than 0.
 //
 // Default: 5 seconds
 func WithRetryDelay(delay time.Duration) WorkerOption {
@@ -258,25 +260,26 @@ func WithRetryDelay(delay time.Duration) WorkerOption {
 	}
 }
 
-// WithBackoffStrategy sets the backoff strategy.
+// WithBackoffStrategy sets how the retry delay increases with each attempt.
+// Use ConstantBackoff, LinearBackoff, ExponentialBackoff, or a custom function.
 //
-// Default: [ConstantBackoff]
+// Default: ConstantBackoff
 func WithBackoffStrategy(strategy BackoffStrategy) WorkerOption {
 	return func(w *Worker) {
 		w.backoffStrategy = strategy
 	}
 }
 
-// WithSchedules sets one or more schedules for when the worker should run.
-// When schedules are set, the worker ignores the tick interval and runs only at the specified times.
-// Multiple schedules can be provided to run at different times.
+// WithSchedules sets specific times for the worker to run, replacing tick-based execution.
+// When schedules are configured, the worker runs only at the specified times.
+// Multiple schedules can be combined to run at different times.
 //
 // Example:
 //
 //	workers.WithSchedules(
-//	    workers.DailyAt(9, 0),                    // Daily at 9:00 AM
-//	    workers.WeeklyAt(time.Friday, 14, 30),    // Every Friday at 2:30 PM
-//	    workers.EveryNDays(2, 2, 0),              // Every 2 days at 2:00 AM
+//	    workers.DailyAt(9, 0),
+//	    workers.WeeklyAt(time.Friday, 14, 30),
+//	    workers.EveryNDays(2, 2, 0),
 //	)
 func WithSchedules(schedules ...Schedule) WorkerOption {
 	return func(w *Worker) {
@@ -284,9 +287,8 @@ func WithSchedules(schedules ...Schedule) WorkerOption {
 	}
 }
 
-// WithNRuns sets a limit on the total number of job executions.
-// When the limit is reached, the worker stops automatically.
-// Must be > 0.
+// WithNRuns limits the total number of times a worker executes.
+// After reaching the limit, the worker stops automatically. Must be greater than 0.
 //
 // Default: unlimited runs
 func WithNRuns(n int) WorkerOption {

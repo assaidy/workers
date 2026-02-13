@@ -9,14 +9,16 @@ import (
 	"syscall"
 )
 
-// WorkerManager manages a collection of workers, handling their lifecycle
-// including startup, graceful shutdown on signals, and panic recovery.
+// WorkerManager coordinates multiple workers, managing their lifecycle from startup
+// to graceful shutdown. It handles OS signals (SIGINT, SIGTERM) and recovers from
+// worker panics to ensure system stability.
 type WorkerManager struct {
 	workers []Worker
 	logger  *slog.Logger
 }
 
-// NewWorkerManager creates a new WorkerManager with the given options.
+// NewWorkerManager creates a manager for coordinating workers.
+// Configure with options before registering workers and calling Start.
 func NewWorkerManager(options ...WorkerManagerOption) WorkerManager {
 	wm := WorkerManager{}
 	for _, opt := range options {
@@ -28,10 +30,10 @@ func NewWorkerManager(options ...WorkerManagerOption) WorkerManager {
 	return wm
 }
 
-// WorkerManagerOption is a function that configures a WorkerManager.
+// WorkerManagerOption configures a WorkerManager. Use WithLogger to create options.
 type WorkerManagerOption func(*WorkerManager)
 
-// WithLogger sets the logger for the WorkerManager and all workers that don't have their own.
+// WithLogger sets the default logger for the manager and all workers without their own logger.
 //
 // Default: slog.Default()
 func WithLogger(logger *slog.Logger) WorkerManagerOption {
@@ -40,7 +42,8 @@ func WithLogger(logger *slog.Logger) WorkerManagerOption {
 	}
 }
 
-// RegisterWorker registers a worker to the manager.
+// RegisterWorker adds a worker to the manager. The worker inherits the manager's
+// logger if it doesn't have its own. Workers must be registered before Start is called.
 func (me *WorkerManager) RegisterWorker(worker Worker) {
 	if worker.logger == nil {
 		worker.logger = me.logger
@@ -48,8 +51,9 @@ func (me *WorkerManager) RegisterWorker(worker Worker) {
 	me.workers = append(me.workers, worker)
 }
 
-// Start begins execution of all registered workers.
-// It blocks until SIGINT or SIGTERM is received, then gracefully shuts down all workers.
+// Start runs all registered workers and blocks until shutdown.
+// Workers execute concurrently. The method blocks until SIGINT or SIGTERM
+// is received, then waits for running jobs to complete before returning.
 func (me WorkerManager) Start() {
 	quitCtx, quitCtxCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
