@@ -12,10 +12,9 @@
 //	wm.RegisterWorker(workers.NewWorker("cleanup", cleanupJob))
 //	wm.Start()
 //
-// Jobs are functions that receive a context and logger:
+// Jobs are functions that receive a context:
 //
-//	func cleanupJob(ctx context.Context, log *slog.Logger) error {
-//	    log.Info("running cleanup")
+//	func cleanupJob(ctx context.Context) error {
 //	    return nil
 //	}
 //

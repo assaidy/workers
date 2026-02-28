@@ -14,7 +14,7 @@ func TestRegisterWorker(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		wm := NewWorkerManager()
 
-		job := func(ctx context.Context, log *slog.Logger) error { return nil }
+		job := func(ctx context.Context) error { return nil }
 
 		w1 := NewWorker("worker1", job)
 		w2 := NewWorker("worker2", job)
@@ -33,7 +33,7 @@ func TestRegisterWorker_AssignsLogger(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 		wm := NewWorkerManager(WithLogger(logger))
 
-		job := func(ctx context.Context, log *slog.Logger) error { return nil }
+		job := func(ctx context.Context) error { return nil }
 		w := NewWorker("test", job)
 
 		// Worker has no logger set
@@ -54,7 +54,7 @@ func TestManager_ContextCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cancelled := make(chan bool, 1)
 
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			time.Sleep(10 * time.Millisecond) // Short work
 			select {
 			case <-ctx.Done():
@@ -97,12 +97,12 @@ func TestManager_MultipleWorkers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var count1, count2 atomic.Int32
 
-		job1 := func(ctx context.Context, log *slog.Logger) error {
+		job1 := func(ctx context.Context) error {
 			count1.Add(1)
 			return nil
 		}
 
-		job2 := func(ctx context.Context, log *slog.Logger) error {
+		job2 := func(ctx context.Context) error {
 			count2.Add(1)
 			return nil
 		}
@@ -133,12 +133,12 @@ func TestIntegration_MixedWorkers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var tickCount, scheduledCount atomic.Int32
 
-		tickJob := func(ctx context.Context, log *slog.Logger) error {
+		tickJob := func(ctx context.Context) error {
 			tickCount.Add(1)
 			return nil
 		}
 
-		scheduledJob := func(ctx context.Context, log *slog.Logger) error {
+		scheduledJob := func(ctx context.Context) error {
 			scheduledCount.Add(1)
 			return nil
 		}
@@ -181,7 +181,7 @@ func TestIntegration_RunLimitWithRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
 
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			// Fail first 2 attempts, succeed on 3rd
 			if callCount < 3 {
@@ -216,7 +216,7 @@ func TestIntegration_ContextTimeoutAcrossRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		timeoutCount := 0
 
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				timeoutCount++
@@ -267,7 +267,7 @@ func TestSchedule_InTimezone(t *testing.T) {
 func TestGetNextWaitDuration_Scheduled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// Create a schedule for tomorrow at noon
-		w := NewWorker("test", func(ctx context.Context, log *slog.Logger) error { return nil })
+		w := NewWorker("test", func(ctx context.Context) error { return nil })
 		w.schedules = []Schedule{DailyAt(12, 0)}
 
 		duration := w.getNextWaitDuration()
@@ -284,7 +284,7 @@ func TestGetNextWaitDuration_Scheduled(t *testing.T) {
 
 func TestGetNextWaitDuration_TickBased(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		w := NewWorker("test", func(ctx context.Context, log *slog.Logger) error { return nil })
+		w := NewWorker("test", func(ctx context.Context) error { return nil })
 
 		duration := w.getNextWaitDuration()
 

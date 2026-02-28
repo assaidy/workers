@@ -51,8 +51,7 @@ func main() {
     wm.Start()
 }
 
-func cleanupJob(ctx context.Context, log *slog.Logger) error {
-    log.Info("running cleanup job")
+func cleanupJob(ctx context.Context) error {
     return nil
 }
 ```
@@ -335,23 +334,19 @@ func main() {
     wm.Start()
 }
 
-func cleanupJob(ctx context.Context, log *slog.Logger) error {
-    log.Info("running cleanup job")
+func cleanupJob(ctx context.Context) error {
     return nil
 }
 
-func reportJob(ctx context.Context, log *slog.Logger) error {
-    log.Info("generating report")
+func reportJob(ctx context.Context) error {
     return nil
 }
 
-func migrateJob(ctx context.Context, log *slog.Logger) error {
-    log.Info("running migration")
+func migrateJob(ctx context.Context) error {
     return nil
 }
 
-func longRunningJob(ctx context.Context, log *slog.Logger) error {
-    log.Info("starting long task")
+func longRunningJob(ctx context.Context) error {
     select {}
 }
 ```

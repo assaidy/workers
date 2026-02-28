@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// next minor release
+// TODO: jittered backoff
+
 // Worker manages a background job with configurable execution intervals,
 // retry logic, timeouts, and scheduling. Workers can run periodically or
 // at specific times defined by schedules.
@@ -26,9 +29,8 @@ type Worker struct {
 }
 
 // WorkerJob defines the function signature for job implementations.
-// The function receives a context for cancellation and timeout handling,
-// and a logger for structured logging within the job.
-type WorkerJob func(context.Context, *slog.Logger) error
+// The function receives a context for cancellation and timeout handling.
+type WorkerJob func(context.Context) error
 
 // Schedule defines when a worker should execute. Use DailyAt, WeeklyAt,
 // or EveryNDays to create schedules. Modify with the In method to set timezones.
@@ -419,7 +421,7 @@ func (me Worker) executeJob() {
 	jobCtx, jobCtxCancel := me.getRunCtx()
 	defer jobCtxCancel()
 
-	if err := me.job(jobCtx, me.logger); err != nil {
+	if err := me.job(jobCtx); err != nil {
 		me.logger.Error("job failed", "worker", me.name, "error", err)
 
 		delay := me.retryDelay
@@ -428,7 +430,7 @@ func (me Worker) executeJob() {
 			me.logger.Info("job retry started", "worker", me.name, "retry", i)
 
 			retryCtx, retryCtxCancel := me.getRunCtx()
-			if err := me.job(retryCtx, me.logger); err != nil {
+			if err := me.job(retryCtx); err != nil {
 				me.logger.Error("job retry failed", "worker", me.name, "retry", i)
 				retryCtxCancel()
 				delay = me.backoffStrategy(me.retryDelay, i)

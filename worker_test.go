@@ -13,7 +13,7 @@ import (
 func TestNewWorker_WithDefaults(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			return nil
 		}
@@ -47,7 +47,7 @@ func TestNewWorker_WithDefaults(t *testing.T) {
 func TestNewWorker_WithAllOptions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		job := func(ctx context.Context, log *slog.Logger) error { return nil }
+		job := func(ctx context.Context) error { return nil }
 
 		w := NewWorker("test", job,
 			WithItsOwnLogger(logger),
@@ -82,7 +82,7 @@ func TestNewWorker_WithAllOptions(t *testing.T) {
 }
 
 func TestNewWorker_PanicsOnInvalidOptions(t *testing.T) {
-	job := func(ctx context.Context, log *slog.Logger) error { return nil }
+	job := func(ctx context.Context) error { return nil }
 
 	tests := []struct {
 		name    string
@@ -160,7 +160,7 @@ func TestNewWorker_PanicsOnInvalidOptions(t *testing.T) {
 func TestWorker_RespectsNRuns(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			return nil
 		}
@@ -192,7 +192,7 @@ func TestWorker_RespectsNRuns(t *testing.T) {
 func TestWorker_RunOnceThenStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			return nil
 		}
@@ -219,7 +219,7 @@ func TestWorker_RunOnceThenStop(t *testing.T) {
 func TestWorker_ZeroRuns_NotCounting(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			return nil
 		}
@@ -255,7 +255,7 @@ func TestWorker_ExecutesImmediatelyOnStartup(t *testing.T) {
 		callCount := 0
 		done := make(chan bool, 1)
 
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			done <- true
 			return nil
@@ -289,7 +289,7 @@ func TestWorker_ExecutesImmediatelyOnStartup(t *testing.T) {
 func TestWorker_ScheduledWorkersWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			return nil
 		}
@@ -320,7 +320,7 @@ func TestWorker_ScheduledWorkersWait(t *testing.T) {
 func TestWorker_RespectsTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		timeoutHit := false
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				timeoutHit = true
@@ -354,7 +354,7 @@ func TestWorker_RespectsTimeout(t *testing.T) {
 func TestWorker_NoTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		jobCompleted := make(chan bool, 1)
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			time.Sleep(50 * time.Millisecond)
 			jobCompleted <- true
 			return nil
@@ -384,7 +384,7 @@ func TestWorker_NoTimeout(t *testing.T) {
 func TestWorker_RetriesOnFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			if callCount < 3 {
 				return errors.New("temporary error")
@@ -416,7 +416,7 @@ func TestWorker_RetriesOnFailure(t *testing.T) {
 func TestWorker_NoRetriesOnSuccess(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			callCount++
 			return nil
 		}
@@ -443,7 +443,7 @@ func TestWorker_NoRetriesOnSuccess(t *testing.T) {
 func TestWorker_RetryWithTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		retryTimeoutCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				retryTimeoutCount++
@@ -479,7 +479,7 @@ func TestWorker_RetryWithTimeout(t *testing.T) {
 func TestWorker_RetryWithoutTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		callCount := 0
-		job := func(ctx context.Context, log *slog.Logger) error {
+		job := func(ctx context.Context) error {
 			// Check that context has no deadline (no timeout set)
 			_, hasDeadline := ctx.Deadline()
 			if hasDeadline {
