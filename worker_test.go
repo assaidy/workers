@@ -55,7 +55,7 @@ func TestNewWorker_WithAllOptions(t *testing.T) {
 			WithTimeout(5*time.Minute),
 			WithNRetries(5),
 			WithRetryDelay(10*time.Second),
-			WithBackoffStrategy(LinearBackoff),
+			WithBackoffStrategy(LinearBackoff()),
 			WithSchedules(DailyAt(9, 0)),
 			WithNRuns(10),
 		)
@@ -518,10 +518,13 @@ func TestConstantBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		baseDelay := 100 * time.Millisecond
 
-		// Should always return the same delay
-		d1 := ConstantBackoff(baseDelay, 1)
-		d2 := ConstantBackoff(baseDelay, 5)
-		d3 := ConstantBackoff(baseDelay, 10)
+		b := ConstantBackoff()
+		b.SetBaseDelay(baseDelay)
+		b.Reset()
+
+		d1 := b.GetNextDelay()
+		d2 := b.GetNextDelay()
+		d3 := b.GetNextDelay()
 
 		if d1 != baseDelay || d2 != baseDelay || d3 != baseDelay {
 			t.Error("ConstantBackoff should return fixed delay")
@@ -533,9 +536,13 @@ func TestLinearBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		baseDelay := 100 * time.Millisecond
 
-		d1 := LinearBackoff(baseDelay, 1)
-		d2 := LinearBackoff(baseDelay, 2)
-		d3 := LinearBackoff(baseDelay, 3)
+		b := LinearBackoff()
+		b.SetBaseDelay(baseDelay)
+		b.Reset()
+
+		d1 := b.GetNextDelay()
+		d2 := b.GetNextDelay()
+		d3 := b.GetNextDelay()
 
 		if d1 != 100*time.Millisecond {
 			t.Errorf("attempt 1: expected 100ms, got %v", d1)
@@ -553,9 +560,13 @@ func TestExponentialBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		baseDelay := 100 * time.Millisecond
 
-		d1 := ExponentialBackoff(baseDelay, 1)
-		d2 := ExponentialBackoff(baseDelay, 2)
-		d3 := ExponentialBackoff(baseDelay, 3)
+		b := ExponentialBackoff()
+		b.SetBaseDelay(baseDelay)
+		b.Reset()
+
+		d1 := b.GetNextDelay()
+		d2 := b.GetNextDelay()
+		d3 := b.GetNextDelay()
 
 		if d1 != 200*time.Millisecond {
 			t.Errorf("attempt 1: expected 200ms, got %v", d1)
@@ -565,6 +576,120 @@ func TestExponentialBackoff(t *testing.T) {
 		}
 		if d3 != 800*time.Millisecond {
 			t.Errorf("attempt 3: expected 800ms, got %v", d3)
+		}
+	})
+}
+
+func TestFullJitterBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		baseDelay := 100 * time.Millisecond
+		capDelay := 400 * time.Millisecond
+
+		b := FullJitterBackoff(capDelay)
+		b.SetBaseDelay(baseDelay)
+		b.Reset()
+
+		for i := 1; i <= 10; i++ {
+			delay := b.GetNextDelay()
+
+			if delay < 0 {
+				t.Errorf("attempt %d: delay should not be negative, got %v", i, delay)
+			}
+			maxDelay := min(capDelay, baseDelay<<uint(i))
+			if delay > maxDelay {
+				t.Errorf("attempt %d: delay %v exceeds max %v", i, delay, maxDelay)
+			}
+		}
+
+		results := make(map[time.Duration]bool)
+		for range 100 {
+			b2 := FullJitterBackoff(capDelay)
+			b2.SetBaseDelay(baseDelay)
+			b2.Reset()
+			delay := b2.GetNextDelay()
+			results[delay] = true
+		}
+
+		if len(results) <= 1 {
+			t.Error("FullJitterBackoff should produce varied results for same attempt")
+		}
+	})
+}
+
+func TestEqualJitterBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		baseDelay := 100 * time.Millisecond
+		capDelay := 400 * time.Millisecond
+
+		b := EqualJitterBackoff(capDelay)
+		b.SetBaseDelay(baseDelay)
+		b.Reset()
+
+		for i := 1; i <= 10; i++ {
+			delay := b.GetNextDelay()
+
+			half := min(capDelay, baseDelay<<uint(i)) >> 1
+			if delay < half {
+				t.Errorf("attempt %d: delay %v less than minimum %v", i, delay, half)
+			}
+			if delay > min(capDelay, baseDelay<<uint(i)) {
+				t.Errorf("attempt %d: delay %v exceeds max %v", i, delay, min(capDelay, baseDelay<<uint(i)))
+			}
+		}
+
+		results := make(map[time.Duration]bool)
+		for range 100 {
+			b2 := EqualJitterBackoff(capDelay)
+			b2.SetBaseDelay(baseDelay)
+			b2.Reset()
+			delay := b2.GetNextDelay()
+			results[delay] = true
+		}
+
+		if len(results) <= 1 {
+			t.Error("EqualJitterBackoff should produce varied results for same attempt")
+		}
+	})
+}
+
+func TestDecorrelatedJitterBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		baseDelay := 100 * time.Millisecond
+		capDelay := 400 * time.Millisecond
+
+		b := DecorrelatedJitterBackoff(capDelay)
+		b.SetBaseDelay(baseDelay)
+		b.Reset()
+
+		delay1 := b.GetNextDelay()
+		if delay1 < baseDelay {
+			t.Errorf("first attempt: delay %v should be >= baseDelay %v", delay1, baseDelay)
+		}
+		if delay1 > capDelay {
+			t.Errorf("first attempt: delay %v should be <= capDelay %v", delay1, capDelay)
+		}
+
+		for i := 2; i <= 5; i++ {
+			delay := b.GetNextDelay()
+			if delay < baseDelay {
+				t.Errorf("attempt %d: delay %v should be >= baseDelay %v", i, delay, baseDelay)
+			}
+			if delay > capDelay {
+				t.Errorf("attempt %d: delay %v should be <= capDelay %v", i, delay, capDelay)
+			}
+		}
+
+		results := make(map[time.Duration]bool)
+		for range 100 {
+			b2 := DecorrelatedJitterBackoff(capDelay)
+			b2.SetBaseDelay(baseDelay)
+			b2.Reset()
+			delay := b2.GetNextDelay()
+			results[delay] = true
+		}
+
+		if len(results) <= 1 {
+			t.Error("DecorrelatedJitterBackoff should produce varied results")
 		}
 	})
 }

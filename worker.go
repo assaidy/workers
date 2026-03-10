@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
+	"math/rand/v2"
 	"time"
 )
-
-// next minor release
-// TODO: jittered backoff
 
 // Worker manages a background job with configurable execution intervals,
 // retry logic, timeouts, and scheduling. Workers can run periodically or
@@ -143,36 +140,227 @@ func (me Schedule) String() string {
 }
 
 // BackoffStrategy defines how long to wait between retry attempts.
-// The baseDelay is the initial delay configured, and attempt is 1-based
-// (first retry is attempt 1). Return the calculated delay duration.
-type BackoffStrategy func(baseDelay time.Duration, attempt int) time.Duration
+// Implement this interface to create custom backoff strategies.
+//
+// The worker calls GetNextDelay() to get the next retry delay.
+// SetBaseDelay(baseDelay) is called when the worker is created to set the initial delay.
+// Reset() is called after a successful retry to reset the backoff state for the next failure cycle.
+//
+// Example:
+//
+//	type myBackoff struct {
+//	    workers.BaseBackoff
+//	}
+//
+//	func (m *myBackoff) SetBaseDelay(baseDelay time.Duration) {
+//	    m.BaseDelay = baseDelay
+//	}
+//
+//	func (m *myBackoff) GetNextDelay() time.Duration {
+//	    m.Attempt += 1
+//	    return m.BaseDelay * time.Duration(m.Attempt)
+//	}
+//
+//	func (m *myBackoff) Reset() {
+//	    m.Attempt = 0
+//	}
+type BackoffStrategy interface {
+	SetBaseDelay(baseDelay time.Duration)
+	GetNextDelay() time.Duration
+	Reset()
+}
 
-// Predefined backoff strategies provide common retry delay patterns.
-// All strategies are type-safe and implement the BackoffStrategy type.
-var (
-	// ConstantBackoff returns a fixed delay regardless of attempt number.
-	//
-	// Example: 5s, 5s, 5s, 5s...
-	ConstantBackoff BackoffStrategy = func(baseDelay time.Duration, attempt int) time.Duration {
-		return baseDelay
-	}
+// BaseBackoff provides common state for backoff strategies.
+// Embed this struct in your custom backoff implementation.
+type BaseBackoff struct {
+	// Attempt is the current retry attempt number.
+	// It is incremented each time GetNextDelay() is called.
+	Attempt int
 
-	// LinearBackoff increases delay linearly with each attempt.
-	// Formula: delay * attempt
-	//
-	// Example: 5s, 10s, 15s, 20s...
-	LinearBackoff BackoffStrategy = func(baseDelay time.Duration, attempt int) time.Duration {
-		return baseDelay * time.Duration(attempt)
-	}
+	// BaseDelay is the initial delay set by SetBaseDelay().
+	// This is typically the retryDelay configured on the worker.
+	BaseDelay time.Duration
 
-	// ExponentialBackoff doubles the delay with each attempt.
-	// Formula: delay * 2^attempt
-	//
-	// Example: 5s, 10s, 20s, 40s...
-	ExponentialBackoff BackoffStrategy = func(baseDelay time.Duration, attempt int) time.Duration {
-		return baseDelay * time.Duration(math.Pow(2, float64(attempt)))
-	}
-)
+	// CapDelay is the maximum delay cap.
+	// Used by jitter strategies to limit maximum backoff time.
+	CapDelay time.Duration
+
+	// PreviousDelay is the delay returned by the last GetNextDelay() call.
+	// Used by decorrelated jitter to calculate the next delay.
+	PreviousDelay time.Duration
+}
+
+func (me *BaseBackoff) SetBaseDelay(baseDelay time.Duration) {
+	me.BaseDelay = baseDelay
+	me.PreviousDelay = baseDelay
+}
+
+func (me *BaseBackoff) Reset() {
+	me.Attempt = 0
+	me.PreviousDelay = me.BaseDelay
+}
+
+type constantBackoff struct {
+	BaseBackoff
+}
+
+func (me *constantBackoff) GetNextDelay() time.Duration {
+	me.Attempt += 1
+	return me.BaseDelay
+}
+
+// ConstantBackoff returns a fixed delay regardless of attempt number.
+//
+// Formula:
+//
+//	delay = baseDelay
+//
+// Example (base=5s):
+//
+//	5s, 5s, 5s, 5s...
+func ConstantBackoff() BackoffStrategy {
+	return &constantBackoff{}
+}
+
+type linearBackoff struct {
+	BaseBackoff
+}
+
+func (me *linearBackoff) GetNextDelay() time.Duration {
+	me.Attempt += 1
+	return me.BaseDelay * time.Duration(me.Attempt)
+}
+
+// LinearBackoff increases delay linearly with each attempt.
+//
+// Formula:
+//
+//	delay = baseDelay * attempt
+//
+// Example (base=5s):
+//
+//	5s, 10s, 15s, 20s...
+func LinearBackoff() BackoffStrategy {
+	return &linearBackoff{}
+}
+
+type exponentialBackoff struct {
+	BaseBackoff
+}
+
+func (me *exponentialBackoff) GetNextDelay() time.Duration {
+	me.Attempt += 1
+	return me.BaseDelay << me.Attempt
+}
+
+// ExponentialBackoff doubles the delay with each attempt.
+//
+// Formula:
+//
+//	delay = baseDelay * 2^attempt
+//
+// Example (base=5s):
+//
+//	5s, 10s, 20s, 40s...
+func ExponentialBackoff() BackoffStrategy {
+	return &exponentialBackoff{}
+}
+
+type fullJitterBackoff struct {
+	BaseBackoff
+}
+
+func (me *fullJitterBackoff) GetNextDelay() time.Duration {
+	me.Attempt += 1
+	maxDelay := min(me.CapDelay, me.BaseDelay<<me.Attempt)
+	return time.Duration(rand.Int64N(int64(maxDelay) + 1))
+}
+
+// FullJitterBackoff returns an exponential backoff strategy with full jitter.
+// The exponential delay is used as a cap, and the actual delay is randomly
+// chosen between 0 and that cap.
+//
+// Formula:
+//
+//	cap = min(capDelay, baseDelay * 2^attempt)
+//	delay = random(0, cap)
+//
+// This strategy spreads retries uniformly to reduce synchronized retry spikes.
+//
+// Example (base=5s, cap=40s):
+//
+//	random(0–10s), random(0–20s), random(0–40s), random(0–40s)...
+func FullJitterBackoff(capDelay time.Duration) BackoffStrategy {
+	return &fullJitterBackoff{BaseBackoff: BaseBackoff{CapDelay: capDelay}}
+}
+
+type equalJitterBackoff struct {
+	BaseBackoff
+}
+
+func (me *equalJitterBackoff) GetNextDelay() time.Duration {
+	me.Attempt += 1
+	maxDelay := min(me.CapDelay, me.BaseDelay<<me.Attempt)
+	half := maxDelay >> 1
+	return half + time.Duration(rand.Int64N(int64(half)+1))
+}
+
+// EqualJitterBackoff returns an exponential backoff strategy with equal jitter.
+// Half of the delay is deterministic and the other half is randomized.
+//
+// Formula:
+//
+//	cap = min(capDelay, baseDelay * 2^attempt)
+//	delay = cap/2 + random(0, cap/2)
+//
+// Compared to Full Jitter, this guarantees a minimum delay while still
+// spreading retries to reduce contention.
+//
+// Example (base=5s, cap=40s):
+//
+//	5s + random(0–5s)
+//	10s + random(0–10s)
+//	20s + random(0–20s)
+//	20s + random(0–20s)...
+func EqualJitterBackoff(capDelay time.Duration) BackoffStrategy {
+	return &equalJitterBackoff{BaseBackoff: BaseBackoff{CapDelay: capDelay}}
+}
+
+type decorrelatedJitterBackoff struct {
+	BaseBackoff
+}
+
+func (me *decorrelatedJitterBackoff) GetNextDelay() time.Duration {
+	me.Attempt += 1
+	maxDelay := me.PreviousDelay * 3
+	random := me.BaseDelay + time.Duration(rand.Int64N(int64(maxDelay-me.BaseDelay)+1))
+	me.PreviousDelay = min(me.CapDelay, random)
+	return me.PreviousDelay
+}
+
+// DecorrelatedJitterBackoff returns an exponential backoff strategy where
+// the next delay depends on the previous delay, with added randomness.
+//
+// Instead of strictly doubling the delay, this method randomly selects
+// a value between baseDelay and three times the previous delay, then
+// clamps it to capDelay.
+//
+// Formula:
+//
+//	delay = min(capDelay, random(baseDelay, previousDelay * 3))
+//
+// This produces a wider distribution of retry delays and helps prevent
+// retry synchronization while still allowing delays to grow over time.
+//
+// Example (base=5s, cap=40s):
+//
+//	random(5–15s)
+//	random(5–45s)
+//	random(5–120s) → capped at 40s
+//	random(5–120s) → capped at 40s...
+func DecorrelatedJitterBackoff(capDelay time.Duration) BackoffStrategy {
+	return &decorrelatedJitterBackoff{BaseBackoff: BaseBackoff{CapDelay: capDelay}}
+}
 
 // NewWorker creates a worker with the specified name and job function.
 // Apply options to configure tick intervals, timeouts, retries, schedules,
@@ -184,12 +372,14 @@ func NewWorker(name string, job WorkerJob, options ...WorkerOption) Worker {
 		tick:            1 * time.Hour,
 		nRetries:        3,
 		retryDelay:      5 * time.Second,
-		backoffStrategy: ConstantBackoff,
+		backoffStrategy: ConstantBackoff(),
 	}
 
 	for _, opt := range options {
 		opt(&w)
 	}
+
+	w.backoffStrategy.SetBaseDelay(w.retryDelay)
 
 	return w
 }
@@ -211,7 +401,8 @@ func WithItsOwnLogger(logger *slog.Logger) WorkerOption {
 }
 
 // WithTick sets the interval between job executions.
-// Ignored when schedules are set. The tick must be greater than 0.
+// Ignored when schedules are set.
+// The tick must be greater than 0.
 //
 // Default: 1 hour
 func WithTick(tick time.Duration) WorkerOption {
@@ -224,7 +415,8 @@ func WithTick(tick time.Duration) WorkerOption {
 }
 
 // WithTimeout sets a maximum execution time for each job run.
-// Jobs exceeding this duration are cancelled via context. Must be greater than 0.
+// Jobs exceeding this duration are cancelled via context.
+// Must be greater than 0.
 //
 // Default: no timeout (jobs run indefinitely)
 func WithTimeout(timeout time.Duration) WorkerOption {
@@ -433,10 +625,11 @@ func (me Worker) executeJob() {
 			if err := me.job(retryCtx); err != nil {
 				me.logger.Error("job retry failed", "worker", me.name, "retry", i)
 				retryCtxCancel()
-				delay = me.backoffStrategy(me.retryDelay, i)
+				delay = me.backoffStrategy.GetNextDelay()
 				continue
 			}
 			retryCtxCancel()
+			me.backoffStrategy.Reset()
 
 			me.logger.Info("job retry finished successfully", "worker", me.name, "retry", i)
 			break

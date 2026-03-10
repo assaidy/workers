@@ -7,7 +7,7 @@ A Go library for managing background workers with periodic execution, retry logi
 - **Periodic execution** - Run jobs at configurable intervals or specific times
 - **Scheduling** - Daily, weekly, or every N days at specific times
 - **Retry logic** - Automatic retries with configurable attempts and delay
-- **Backoff strategies** - Constant, Linear, and Exponential backoff
+- **Backoff strategies** - Constant, Linear, Exponential, and Jitter backoff
 - **Timeout support** - Set max execution time per job
 - **Execution limit** - Limit total number of job runs
 - **Graceful shutdown** - Handles SIGINT/SIGTERM signals properly
@@ -128,7 +128,7 @@ wm.RegisterWorker(workers.NewWorker("api-sync", apiSyncJob,
     workers.WithTick(5*time.Minute),
     workers.WithNRetries(5),
     workers.WithRetryDelay(5*time.Second),
-    workers.WithBackoffStrategy(workers.ConstantBackoff),
+    workers.WithBackoffStrategy(workers.ConstantBackoff()),
 ))
 
 // Linear backoff: 5s, 10s, 15s, 20s...
@@ -136,7 +136,7 @@ wm.RegisterWorker(workers.NewWorker("slow-api", slowApiJob,
     workers.WithTick(10*time.Minute),
     workers.WithNRetries(4),
     workers.WithRetryDelay(5*time.Second),
-    workers.WithBackoffStrategy(workers.LinearBackoff),
+    workers.WithBackoffStrategy(workers.LinearBackoff()),
 ))
 
 // Exponential backoff: 5s, 10s, 20s, 40s...
@@ -144,7 +144,15 @@ wm.RegisterWorker(workers.NewWorker("unstable-api", unstableApiJob,
     workers.WithTick(15*time.Minute),
     workers.WithNRetries(3),
     workers.WithRetryDelay(5*time.Second),
-    workers.WithBackoffStrategy(workers.ExponentialBackoff),
+    workers.WithBackoffStrategy(workers.ExponentialBackoff()),
+))
+
+// Full jitter: random(0-5s), random(0-10s), random(0-20s), random(0-40s)...
+wm.RegisterWorker(workers.NewWorker("jitter-api", jitterApiJob,
+    workers.WithTick(10*time.Minute),
+    workers.WithNRetries(3),
+    workers.WithRetryDelay(5*time.Second),
+    workers.WithBackoffStrategy(workers.FullJitterBackoff(40*time.Second)),
 ))
 ```
 
@@ -250,23 +258,42 @@ wm.RegisterWorker(workers.NewWorker("utc-cleanup", cleanupJob,
 
 | Strategy | Pattern | Example (5s base) |
 |----------|---------|-------------------|
-| `ConstantBackoff` | Fixed delay | 5s, 5s, 5s, 5s |
-| `LinearBackoff` | Linear increase | 5s, 10s, 15s, 20s |
-| `ExponentialBackoff` | Exponential increase | 5s, 10s, 20s, 40s |
+| `ConstantBackoff()` | Fixed delay | 5s, 5s, 5s, 5s |
+| `LinearBackoff()` | Linear increase | 5s, 10s, 15s, 20s |
+| `ExponentialBackoff()` | Exponential increase | 5s, 10s, 20s, 40s |
+| `FullJitterBackoff(cap)` | Full jitter | random(0-5s), random(0-10s), ... |
+| `EqualJitterBackoff(cap)` | Equal jitter | 2.5s+random, 5s+random, ... |
+| `DecorrelatedJitterBackoff(cap)` | Decorrelated jitter | random, random, ... |
 
-**Custom backoff strategies:** You can define your own backoff strategy by implementing the `BackoffStrategy` type:
+**Custom backoff strategies:** You can define your own backoff strategy by implementing the `BackoffStrategy` interface and embedding `BaseBackoff`:
 
 ```go
-type BackoffStrategy func(baseDelay time.Duration, attempt int) time.Duration
+type BackoffStrategy interface {
+    SetBaseDelay(baseDelay time.Duration)
+    GetNextDelay() time.Duration
+    Reset()
+}
 
-// Example: Custom backoff that increases by 3x each attempt
-myBackoff := func(baseDelay time.Duration, attempt int) time.Duration {
-    return baseDelay * time.Duration(math.Pow(3, float64(attempt)))
+type MyBackoff struct {
+    workers.BaseBackoff
+}
+
+func (m *MyBackoff) SetBaseDelay(baseDelay time.Duration) {
+    m.BaseDelay = baseDelay
+}
+
+func (m *MyBackoff) GetNextDelay() time.Duration {
+    m.Attempt += 1
+    return m.BaseDelay * time.Duration(math.Pow(3, float64(m.Attempt)))
 }
 // 5s, 15s, 45s, 135s...
 
+func (m *MyBackoff) Reset() {
+    m.Attempt = 0
+}
+
 wm.RegisterWorker(workers.NewWorker("custom", jobFunc,
-    workers.WithBackoffStrategy(myBackoff),
+    workers.WithBackoffStrategy(&MyBackoff{}),
 ))
 ```
 
