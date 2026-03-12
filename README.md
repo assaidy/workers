@@ -270,7 +270,7 @@ wm.RegisterWorker(workers.NewWorker("utc-cleanup", cleanupJob,
 ```go
 type BackoffStrategy interface {
     SetBaseDelay(baseDelay time.Duration)
-    GetNextDelay() time.Duration
+    GetDelay(attempt int) time.Duration
     Reset()
 }
 
@@ -282,9 +282,8 @@ func (m *MyBackoff) SetBaseDelay(baseDelay time.Duration) {
     m.BaseDelay = baseDelay
 }
 
-func (m *MyBackoff) GetNextDelay() time.Duration {
-    m.Attempt += 1
-    return m.BaseDelay * time.Duration(math.Pow(3, float64(m.Attempt)))
+func (m *MyBackoff) GetDelay(attempt int) time.Duration {
+    return m.BaseDelay * time.Duration(math.Pow(3, float64(attempt)))
 }
 // 5s, 15s, 45s, 135s...
 

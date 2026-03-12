@@ -142,7 +142,7 @@ func (me Schedule) String() string {
 // BackoffStrategy defines how long to wait between retry attempts.
 // Implement this interface to create custom backoff strategies.
 //
-// The worker calls GetNextDelay() to get the next retry delay.
+// The worker calls GetDelay(attempt) to get the dealy before the next attempt.
 // SetBaseDelay(baseDelay) is called when the worker is created to set the initial delay.
 // Reset() is called after a successful retry to reset the backoff state for the next failure cycle.
 //
@@ -156,27 +156,20 @@ func (me Schedule) String() string {
 //	    m.BaseDelay = baseDelay
 //	}
 //
-//	func (m *myBackoff) GetNextDelay() time.Duration {
-//	    m.Attempt += 1
-//	    return m.BaseDelay * time.Duration(m.Attempt)
+//	func (m *myBackoff) GetDelay(attempt int) time.Duration {
+//	    return m.BaseDelay * time.Duration(attempt)
 //	}
 //
-//	func (m *myBackoff) Reset() {
-//	    m.Attempt = 0
-//	}
+//	func (m *myBackoff) Reset() {}
 type BackoffStrategy interface {
 	SetBaseDelay(baseDelay time.Duration)
-	GetNextDelay() time.Duration
+	GetDelay(attempt int) time.Duration
 	Reset()
 }
 
 // BaseBackoff provides common state for backoff strategies.
 // Embed this struct in your custom backoff implementation.
 type BaseBackoff struct {
-	// Attempt is the current retry attempt number.
-	// It is incremented each time GetNextDelay() is called.
-	Attempt int
-
 	// BaseDelay is the initial delay set by SetBaseDelay().
 	// This is typically the retryDelay configured on the worker.
 	BaseDelay time.Duration
@@ -185,7 +178,7 @@ type BaseBackoff struct {
 	// Used by jitter strategies to limit maximum backoff time.
 	CapDelay time.Duration
 
-	// PreviousDelay is the delay returned by the last GetNextDelay() call.
+	// PreviousDelay is the delay returned by the last GetDelay(attempt) call.
 	// Used by decorrelated jitter to calculate the next delay.
 	PreviousDelay time.Duration
 }
@@ -196,17 +189,7 @@ func (me *BaseBackoff) SetBaseDelay(baseDelay time.Duration) {
 }
 
 func (me *BaseBackoff) Reset() {
-	me.Attempt = 0
 	me.PreviousDelay = me.BaseDelay
-}
-
-type constantBackoff struct {
-	BaseBackoff
-}
-
-func (me *constantBackoff) GetNextDelay() time.Duration {
-	me.Attempt += 1
-	return me.BaseDelay
 }
 
 // ConstantBackoff returns a fixed delay regardless of attempt number.
@@ -222,13 +205,12 @@ func ConstantBackoff() BackoffStrategy {
 	return &constantBackoff{}
 }
 
-type linearBackoff struct {
+type constantBackoff struct {
 	BaseBackoff
 }
 
-func (me *linearBackoff) GetNextDelay() time.Duration {
-	me.Attempt += 1
-	return me.BaseDelay * time.Duration(me.Attempt)
+func (me *constantBackoff) GetDelay(attempt int) time.Duration {
+	return me.BaseDelay
 }
 
 // LinearBackoff increases delay linearly with each attempt.
@@ -244,13 +226,12 @@ func LinearBackoff() BackoffStrategy {
 	return &linearBackoff{}
 }
 
-type exponentialBackoff struct {
+type linearBackoff struct {
 	BaseBackoff
 }
 
-func (me *exponentialBackoff) GetNextDelay() time.Duration {
-	me.Attempt += 1
-	return me.BaseDelay << me.Attempt
+func (me *linearBackoff) GetDelay(attempt int) time.Duration {
+	return me.BaseDelay * time.Duration(attempt)
 }
 
 // ExponentialBackoff doubles the delay with each attempt.
@@ -266,14 +247,12 @@ func ExponentialBackoff() BackoffStrategy {
 	return &exponentialBackoff{}
 }
 
-type fullJitterBackoff struct {
+type exponentialBackoff struct {
 	BaseBackoff
 }
 
-func (me *fullJitterBackoff) GetNextDelay() time.Duration {
-	me.Attempt += 1
-	maxDelay := min(me.CapDelay, me.BaseDelay<<me.Attempt)
-	return time.Duration(rand.Int64N(int64(maxDelay) + 1))
+func (me *exponentialBackoff) GetDelay(attempt int) time.Duration {
+	return me.BaseDelay << attempt
 }
 
 // FullJitterBackoff returns an exponential backoff strategy with full jitter.
@@ -294,15 +273,13 @@ func FullJitterBackoff(capDelay time.Duration) BackoffStrategy {
 	return &fullJitterBackoff{BaseBackoff: BaseBackoff{CapDelay: capDelay}}
 }
 
-type equalJitterBackoff struct {
+type fullJitterBackoff struct {
 	BaseBackoff
 }
 
-func (me *equalJitterBackoff) GetNextDelay() time.Duration {
-	me.Attempt += 1
-	maxDelay := min(me.CapDelay, me.BaseDelay<<me.Attempt)
-	half := maxDelay >> 1
-	return half + time.Duration(rand.Int64N(int64(half)+1))
+func (me *fullJitterBackoff) GetDelay(attempt int) time.Duration {
+	maxDelay := min(me.CapDelay, me.BaseDelay<<attempt)
+	return time.Duration(rand.Int64N(int64(maxDelay) + 1))
 }
 
 // EqualJitterBackoff returns an exponential backoff strategy with equal jitter.
@@ -326,16 +303,14 @@ func EqualJitterBackoff(capDelay time.Duration) BackoffStrategy {
 	return &equalJitterBackoff{BaseBackoff: BaseBackoff{CapDelay: capDelay}}
 }
 
-type decorrelatedJitterBackoff struct {
+type equalJitterBackoff struct {
 	BaseBackoff
 }
 
-func (me *decorrelatedJitterBackoff) GetNextDelay() time.Duration {
-	me.Attempt += 1
-	maxDelay := me.PreviousDelay * 3
-	random := me.BaseDelay + time.Duration(rand.Int64N(int64(maxDelay-me.BaseDelay)+1))
-	me.PreviousDelay = min(me.CapDelay, random)
-	return me.PreviousDelay
+func (me *equalJitterBackoff) GetDelay(attempt int) time.Duration {
+	maxDelay := min(me.CapDelay, me.BaseDelay<<attempt)
+	half := maxDelay >> 1
+	return half + time.Duration(rand.Int64N(int64(half)+1))
 }
 
 // DecorrelatedJitterBackoff returns an exponential backoff strategy where
@@ -360,6 +335,17 @@ func (me *decorrelatedJitterBackoff) GetNextDelay() time.Duration {
 //	random(5–120s) → capped at 40s...
 func DecorrelatedJitterBackoff(capDelay time.Duration) BackoffStrategy {
 	return &decorrelatedJitterBackoff{BaseBackoff: BaseBackoff{CapDelay: capDelay}}
+}
+
+type decorrelatedJitterBackoff struct {
+	BaseBackoff
+}
+
+func (me *decorrelatedJitterBackoff) GetDelay(attempt int) time.Duration {
+	maxDelay := me.PreviousDelay * 3
+	random := me.BaseDelay + time.Duration(rand.Int64N(int64(maxDelay-me.BaseDelay)+1))
+	me.PreviousDelay = min(me.CapDelay, random)
+	return me.PreviousDelay
 }
 
 // NewWorker creates a worker with the specified name and job function.
@@ -617,21 +603,21 @@ func (me Worker) executeJob() {
 		me.logger.Error("job failed", "worker", me.name, "error", err)
 
 		delay := me.retryDelay
-		for i := 1; i <= me.nRetries; i++ {
+		for attempt := 1; attempt <= me.nRetries; attempt++ {
 			<-time.After(delay)
-			me.logger.Info("job retry started", "worker", me.name, "retry", i)
+			me.logger.Info("job retry started", "worker", me.name, "attempt", attempt)
 
 			retryCtx, retryCtxCancel := me.getRunCtx()
 			if err := me.job(retryCtx); err != nil {
-				me.logger.Error("job retry failed", "worker", me.name, "retry", i)
+				me.logger.Error("job retry failed", "worker", me.name, "attempt", attempt)
 				retryCtxCancel()
-				delay = me.backoffStrategy.GetNextDelay()
+				delay = me.backoffStrategy.GetDelay(attempt)
 				continue
 			}
 			retryCtxCancel()
 			me.backoffStrategy.Reset()
 
-			me.logger.Info("job retry finished successfully", "worker", me.name, "retry", i)
+			me.logger.Info("job retry finished successfully", "worker", me.name, "attempt", attempt)
 			break
 		}
 	} else {

@@ -522,9 +522,9 @@ func TestConstantBackoff(t *testing.T) {
 		b.SetBaseDelay(baseDelay)
 		b.Reset()
 
-		d1 := b.GetNextDelay()
-		d2 := b.GetNextDelay()
-		d3 := b.GetNextDelay()
+		d1 := b.GetDelay(1)
+		d2 := b.GetDelay(2)
+		d3 := b.GetDelay(3)
 
 		if d1 != baseDelay || d2 != baseDelay || d3 != baseDelay {
 			t.Error("ConstantBackoff should return fixed delay")
@@ -540,9 +540,9 @@ func TestLinearBackoff(t *testing.T) {
 		b.SetBaseDelay(baseDelay)
 		b.Reset()
 
-		d1 := b.GetNextDelay()
-		d2 := b.GetNextDelay()
-		d3 := b.GetNextDelay()
+		d1 := b.GetDelay(1)
+		d2 := b.GetDelay(2)
+		d3 := b.GetDelay(3)
 
 		if d1 != 100*time.Millisecond {
 			t.Errorf("attempt 1: expected 100ms, got %v", d1)
@@ -564,9 +564,9 @@ func TestExponentialBackoff(t *testing.T) {
 		b.SetBaseDelay(baseDelay)
 		b.Reset()
 
-		d1 := b.GetNextDelay()
-		d2 := b.GetNextDelay()
-		d3 := b.GetNextDelay()
+		d1 := b.GetDelay(1)
+		d2 := b.GetDelay(2)
+		d3 := b.GetDelay(3)
 
 		if d1 != 200*time.Millisecond {
 			t.Errorf("attempt 1: expected 200ms, got %v", d1)
@@ -590,7 +590,7 @@ func TestFullJitterBackoff(t *testing.T) {
 		b.Reset()
 
 		for i := 1; i <= 10; i++ {
-			delay := b.GetNextDelay()
+			delay := b.GetDelay(i)
 
 			if delay < 0 {
 				t.Errorf("attempt %d: delay should not be negative, got %v", i, delay)
@@ -606,7 +606,7 @@ func TestFullJitterBackoff(t *testing.T) {
 			b2 := FullJitterBackoff(capDelay)
 			b2.SetBaseDelay(baseDelay)
 			b2.Reset()
-			delay := b2.GetNextDelay()
+			delay := b2.GetDelay(1)
 			results[delay] = true
 		}
 
@@ -626,7 +626,7 @@ func TestEqualJitterBackoff(t *testing.T) {
 		b.Reset()
 
 		for i := 1; i <= 10; i++ {
-			delay := b.GetNextDelay()
+			delay := b.GetDelay(i)
 
 			half := min(capDelay, baseDelay<<uint(i)) >> 1
 			if delay < half {
@@ -642,7 +642,7 @@ func TestEqualJitterBackoff(t *testing.T) {
 			b2 := EqualJitterBackoff(capDelay)
 			b2.SetBaseDelay(baseDelay)
 			b2.Reset()
-			delay := b2.GetNextDelay()
+			delay := b2.GetDelay(1)
 			results[delay] = true
 		}
 
@@ -661,7 +661,7 @@ func TestDecorrelatedJitterBackoff(t *testing.T) {
 		b.SetBaseDelay(baseDelay)
 		b.Reset()
 
-		delay1 := b.GetNextDelay()
+		delay1 := b.GetDelay(1)
 		if delay1 < baseDelay {
 			t.Errorf("first attempt: delay %v should be >= baseDelay %v", delay1, baseDelay)
 		}
@@ -670,7 +670,7 @@ func TestDecorrelatedJitterBackoff(t *testing.T) {
 		}
 
 		for i := 2; i <= 5; i++ {
-			delay := b.GetNextDelay()
+			delay := b.GetDelay(i)
 			if delay < baseDelay {
 				t.Errorf("attempt %d: delay %v should be >= baseDelay %v", i, delay, baseDelay)
 			}
@@ -684,7 +684,7 @@ func TestDecorrelatedJitterBackoff(t *testing.T) {
 			b2 := DecorrelatedJitterBackoff(capDelay)
 			b2.SetBaseDelay(baseDelay)
 			b2.Reset()
-			delay := b2.GetNextDelay()
+			delay := b2.GetDelay(1)
 			results[delay] = true
 		}
 
