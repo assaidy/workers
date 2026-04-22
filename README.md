@@ -29,26 +29,34 @@ import (
     "context"
     "log/slog"
     "os"
+    "os/signal"
+    "syscall"
     "time"
-    
+
     "github.com/assaidy/workers"
 )
 
 func main() {
     logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-    
+
     wm := workers.NewWorkerManager(
         workers.WithLogger(logger),
     )
-    
+
     wm.RegisterWorker(workers.NewWorker("cleanup", cleanupJob,
         workers.WithTick(30*time.Minute),
         workers.WithTimeout(5*time.Minute),
         workers.WithNRetries(3),
         workers.WithRetryDelay(5*time.Second),
     ))
-    
+
     wm.Start()
+
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+    <-sigChan
+
+    wm.Stop()
 }
 
 func cleanupJob(ctx context.Context) error {
@@ -184,22 +192,19 @@ wm.RegisterWorker(workers.NewWorker("long-task", longRunningJob,
 
 **When to use:** Long-running initialization, unbounded processing tasks.
 
-### 8. Custom Logger Per Worker
+### 8. Custom Logger
 
-Override the default logger for specific workers.
-
-> **Note:** The `*slog.Logger` passed as the second parameter to your job function is the worker's logger (inherited from WorkerManager unless overridden with `WithItsOwnLogger`).
+Set a custom logger for all workers.
 
 ```go
 customLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-wm.RegisterWorker(workers.NewWorker("json-logger", jobFunc,
-    workers.WithTick(5*time.Minute),
-    workers.WithItsOwnLogger(customLogger),
-))
+wm := workers.NewWorkerManager(
+    workers.WithLogger(customLogger),
+)
 ```
 
-**When to use:** Different log formats per worker, separate log destinations, custom log levels.
+**When to use:** Different log formats, separate log destinations, custom log levels.
 
 ### 9. Timezone Support
 
@@ -243,7 +248,6 @@ wm.RegisterWorker(workers.NewWorker("utc-cleanup", cleanupJob,
 | `WithBackoffStrategy(strategy)` | Retry backoff pattern | `ConstantBackoff` |
 | `WithSchedules(schedules...)` | Specific run times | Tick-based |
 | `WithNRuns(n)` | Limit total executions | Unlimited |
-| `WithItsOwnLogger(logger)` | Worker-specific logger | Manager's logger |
 
 ### Schedule Functions
 

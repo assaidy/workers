@@ -294,3 +294,25 @@ func TestGetNextWaitDuration_TickBased(t *testing.T) {
 		}
 	})
 }
+
+func TestWorkerManager_StartStop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var executed atomic.Bool
+
+		job := func(ctx context.Context) error {
+			executed.Store(true)
+			return nil
+		}
+
+		wm := NewWorkerManager()
+		wm.RegisterWorker(NewWorker("test", job, WithTick(50*time.Millisecond), WithNRuns(3)))
+
+		wm.Start()
+		time.Sleep(200 * time.Millisecond)
+		wm.Stop()
+
+		if !executed.Load() {
+			t.Error("worker should have executed")
+		}
+	})
+}

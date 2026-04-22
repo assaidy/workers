@@ -373,19 +373,6 @@ func NewWorker(name string, job WorkerJob, options ...WorkerOption) Worker {
 // WorkerOption configures a Worker. Use the With* functions to create options.
 type WorkerOption func(*Worker)
 
-// WithItsOwnLogger sets a worker-specific logger, overriding the WorkerManager's logger.
-// The logger must not be nil.
-//
-// Default: inherits from WorkerManager
-func WithItsOwnLogger(logger *slog.Logger) WorkerOption {
-	return func(w *Worker) {
-		if logger == nil {
-			panic("cannot explicitly set a nil logger")
-		}
-		w.logger = logger
-	}
-}
-
 // WithTick sets the interval between job executions.
 // Ignored when schedules are set.
 // The tick must be greater than 0.
@@ -481,7 +468,7 @@ func WithNRuns(n int) WorkerOption {
 }
 
 // start begins the worker's execution loop.
-func (me *Worker) start(workerCtx context.Context) {
+func (me *Worker) start(ctx context.Context) {
 	me.logger.Info("worker started", "worker", me.name)
 	defer me.logger.Info("worker stopped", "worker", me.name)
 
@@ -512,7 +499,7 @@ func (me *Worker) start(workerCtx context.Context) {
 					return
 				}
 			}
-		case <-workerCtx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}

@@ -46,11 +46,9 @@ func TestNewWorker_WithDefaults(t *testing.T) {
 
 func TestNewWorker_WithAllOptions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 		job := func(ctx context.Context) error { return nil }
 
 		w := NewWorker("test", job,
-			WithItsOwnLogger(logger),
 			WithTick(30*time.Second),
 			WithTimeout(5*time.Minute),
 			WithNRetries(5),
@@ -89,11 +87,6 @@ func TestNewWorker_PanicsOnInvalidOptions(t *testing.T) {
 		opt     WorkerOption
 		wantErr string
 	}{
-		{
-			name:    "nil logger",
-			opt:     WithItsOwnLogger(nil),
-			wantErr: "cannot explicitly set a nil logger",
-		},
 		{
 			name:    "zero tick",
 			opt:     WithTick(0),
