@@ -44,13 +44,15 @@ func WithLogger(logger *slog.Logger) WorkerManagerOption {
 	}
 }
 
-// RegisterWorker adds a worker to the manager. The worker inherits the manager's
-// logger if it doesn't have its own. Workers must be registered before Start is called.
+// RegisterWorker adds a worker to the manager.
+// The worker inherits the manager's logger.
+// Workers must be registered before Start is called.
 func (me *WorkerManager) RegisterWorker(worker Worker) {
 	worker.logger = me.logger
 	me.workers = append(me.workers, worker)
 }
 
+// Start launches all registered workers and returns immediately.
 func (me *WorkerManager) Start() {
 	me.ctx, me.cancel = context.WithCancel(context.Background())
 
@@ -70,6 +72,8 @@ func (me *WorkerManager) Start() {
 	}
 }
 
+// Stop signals all workers to cancel and waits for them to complete.
+// It blocks until all workers have finished.
 func (me *WorkerManager) Stop() {
 	me.logger.Info("stopping workers", "count", len(me.workers))
 	defer me.logger.Info("stopped all workers")

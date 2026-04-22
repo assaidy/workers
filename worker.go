@@ -468,6 +468,7 @@ func WithNRuns(n int) WorkerOption {
 }
 
 // start begins the worker's execution loop.
+// The context is used for cancellation signals from WorkerManager.
 func (me *Worker) start(ctx context.Context) {
 	me.logger.Info("worker started", "worker", me.name)
 	defer me.logger.Info("worker stopped", "worker", me.name)
