@@ -51,12 +51,11 @@ func main() {
     ))
 
     wm.Start()
+    defer wm.Stop()
 
     sigChan := make(chan os.Signal, 1)
     signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
     <-sigChan
-
-    wm.Stop()
 }
 
 func cleanupJob(ctx context.Context) error {
@@ -362,6 +361,11 @@ func main() {
     ))
     
     wm.Start()
+    defer wm.Stop()
+
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+    <-sigChan
 }
 
 func cleanupJob(ctx context.Context) error {
