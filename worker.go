@@ -492,7 +492,7 @@ func (me *Worker) start(ctx context.Context) {
 
 		select {
 		case <-time.After(waitDuration):
-			me.executeJob()
+			me.executeJob(ctx)
 			if me.nRuns > 0 { // Avoid overflow by only incrementing for limited runs
 				me.runCount++
 				if me.runCount >= me.nRuns {
@@ -581,22 +581,30 @@ func (me Worker) calculateNextRun(schedule Schedule, from time.Time) time.Time {
 }
 
 // executeJob runs the job with retries.
-func (me Worker) executeJob() {
+func (me Worker) executeJob(ctx context.Context) {
 	me.logger.Info("job started", "worker", me.name)
 
-	jobCtx, jobCtxCancel := me.getRunCtx()
-	defer jobCtxCancel()
+	firstCtx, firstCtxCancel := me.getRunCtx(ctx)
+	defer firstCtxCancel()
 
-	if err := me.job(jobCtx); err != nil {
+	if err := me.job(firstCtx); err != nil {
 		me.logger.Error("job failed", "worker", me.name, "error", err)
+
+		if err == context.Canceled {
+			return
+		}
 
 		delay := me.retryDelay
 		for attempt := 1; attempt <= me.nRetries; attempt++ {
 			<-time.After(delay)
 			me.logger.Info("job retry started", "worker", me.name, "attempt", attempt)
 
-			retryCtx, retryCtxCancel := me.getRunCtx()
+			retryCtx, retryCtxCancel := me.getRunCtx(ctx)
 			if err := me.job(retryCtx); err != nil {
+				if err == context.Canceled {
+					retryCtxCancel()
+					return
+				}
 				me.logger.Error("job retry failed", "worker", me.name, "attempt", attempt)
 				retryCtxCancel()
 				delay = me.backoffStrategy.GetDelay(attempt)
@@ -613,11 +621,11 @@ func (me Worker) executeJob() {
 	}
 }
 
-func (me Worker) getRunCtx() (context.Context, context.CancelFunc) {
+func (me Worker) getRunCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	if me.timeout > 0 {
-		return context.WithTimeout(context.Background(), me.timeout)
+		return context.WithTimeout(ctx, me.timeout)
 	}
 	// No timeout if value <= 0 (default).
 	// Users can only set timeout to value > 0.
-	return context.WithCancel(context.Background())
+	return context.WithCancel(ctx)
 }
